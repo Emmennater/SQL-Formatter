@@ -1,44 +1,10 @@
 const syntax = `
-# Extended SQL Grammar
-
-# Entry point
-Query -> [Expr];
-
-# Main statement types
-Expr -> [SelectStmt]
- 
-# SELECT statements (expanded from your original)
-SelectStmt -> SELECT [SelectList] [FromClause] [WhereClause]
-
-SelectList -> [SelectItem] [SelectItems] | * [Alias]
-SelectItems -> , [SelectItem] [SelectItems] | e
-
-SelectItem -> [Column] [Alias] | * | [Value] [Alias]
-Alias -> AS [Identifier] | e
-TableAlias -> [Identifier] | e
-
-# FROM clause (expanded)
-FromClause -> FROM [TableRef] [TableRefs] | e
-
-TableRefs -> , [TableRef] [TableRefs] | e
-TableRef -> [Table] [TableAlias] | ( [SelectStmt] ) [TableAlias]
-
-# WHERE clause
-WhereClause -> WHERE [Condition] | e
-
-# Conditions and expressions
-Condition -> [Value] = [Value]
-
-# Basic elements (from your original, with expansions)
-Column -> [Identifier] [ColumnRef]
-ColumnRef -> . [Identifier] | e
-Table -> [Identifier] [TablePath]
-TablePath -> . [Identifier] [TablePath] | e
-Value -> [Number] | [String] | [Boolean] | NULL | [Column]
-Identifier -> symbol
-Number -> number
-String -> string
-Boolean -> TRUE | FALSE
+# Testing
+E -> [T] [E0]
+E0 -> + [T] [E0] | e
+T -> [F] [T0]
+T0 -> * [F] [T0]
+F -> id | ( [E] )
 `;
 
 const input = `
@@ -100,6 +66,137 @@ function tokenize(input) {
   let regex = /\[[a-zA-Z_][a-zA-Z0-9_]*\]|[a-zA-Z_][a-zA-Z0-9_]*|\\w+|--.*|[\S]/g;
   let tokens = input.match(regex);
   return tokens;
+}
+
+/**
+ * 
+ * @param {Array} grammar An array of productions where each production is an object with a name and a rules array\
+ * e.g. [{ name: 'S', rules: [[1, 'b'], [2, 'd']] }]
+ * @param {Object} productions A map of production names to indices\
+ * e.g. { S: 0, B: 1, C: 2 }
+ */
+function ll1toParsingTable(grammar, productions) {
+  print(grammar, productions);
+
+  // Caching to prevent infinite recursion and improve performance
+  let cacheFirst = Array(grammar.length);
+  let cacheFollow = Array(grammar.length);
+  for (let i = 0; i < cacheFirst.length; i++) {
+    cacheFirst[i] = Array(grammar[i].rules.length);
+    for (let j = 0; j < cacheFirst[i].length; j++) {
+      cacheFirst[i][j] = new Set();
+    }
+  }
+
+  function getRuleEnumerater(productionIdx) {
+    return Array(grammar[productionIdx].rules.length).fill(0).map((_, i) => [productionIdx, i]);
+  }
+
+  function getFirstProduction(productionIdx, callStack = []) {
+    for (let [prodI, ruleI] of getRuleEnumerater(productionIdx)) {
+      getFirst(prodI, ruleI, callStack);
+    }
+  }
+
+  function getFirst(productionIdx, ruleIdx, callStack = []) {
+    const set = cacheFirst[productionIdx][ruleIdx];
+    const production = grammar[productionIdx];
+    const rule = production.rules[ruleIdx];
+    const first = rule[0];
+
+    // Check call stack for circular dependency, e.g. getFirst(0, 0) -> getFirst(0, 0)
+    for (let i = 0; i < callStack.length; i++) {
+      if (callStack[i][0] === productionIdx && callStack[i][1] === ruleIdx) {
+        return; // Circular dependency so ignore this rule
+      }
+    }
+
+    // If the first element is a terminal, add it to the set and return
+    if (typeof first === 'string') {
+      // Add to this rule
+      set.add(first);
+      
+      // Add this first to every rule in the call stack
+      for (let [prodI, ruleI] of callStack) {
+        cacheFirst[prodI][ruleI].add(first);
+      }
+
+      return;
+    }
+
+    // If the first element is a non-terminal, find the first of the non-terminal
+    if (typeof first === 'number') getFirstProduction(first, [...callStack, [productionIdx, ruleIdx]]);
+  }
+
+  function getFollow(productionIdx) {
+    // Caching
+    if (cacheFollow[productionIdx] !== undefined) return;
+    cacheFollow[productionIdx] = new Set();
+
+    // If the production is the start production, add $ to the set
+    if (productionIdx === 0) {
+      cacheFollow[productionIdx].add('$');
+      return;
+    }
+
+    // Find all appearances of the production in the grammar
+    for (let i = grammar.length - 1; i >= 0; i--) {
+      let production = grammar[i];
+      let rules = production.rules;
+      for (let j = 0; j < rules.length; j++) {
+        let rule = rules[j];
+        for (let k = 0; k < rule.length; k++) {
+          let element = rule[k];
+          if (typeof element === 'number' && element === productionIdx) {
+            // We found an appearance of the production
+            let nextElement = rule[k + 1];
+            
+            // If there is no next element, get the follow of the current production
+            if (nextElement === undefined) {
+              getFollow(i);
+              for (let follow of cacheFollow[i]) {
+                cacheFollow[productionIdx].add(follow);
+              }
+              continue;
+            }
+
+            // If the next element is terminal, add it to the set
+            if (typeof nextElement === 'string') {
+              cacheFollow[productionIdx].add(nextElement);
+              continue;
+            }
+
+            // If the next element is non-terminal add the first of the non-terminal to the set
+            if (typeof nextElement === 'number') {
+              for (let [prodI, ruleI] of getRuleEnumerater(nextElement)) {
+                for (let first of cacheFirst[prodI][ruleI]) {
+                  // Add the first of the non-terminal to the set
+                  if (first !== '') {
+                    cacheFollow[productionIdx].add(first);
+                    continue;
+                  }
+
+                  // Otherwise find the follow of the non-terminal
+                  getFollow(prodI);
+                  for (let follow of cacheFollow[prodI]) {
+                    // But then if this is an epsilon add the follow to the set and so on...
+                    cacheFollow[productionIdx].add(follow);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Go in reverse order because terminals are likely to be at the end
+  for (let i = grammar.length - 1; i >= 0; i--) {
+    getFirstProduction(i);
+  }
+
+  print(cacheFirst);
 }
 
 function ll1toStackMachine(grammar, productions) {

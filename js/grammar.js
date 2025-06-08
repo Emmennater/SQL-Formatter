@@ -1,17 +1,132 @@
 const syntax = `
-# Testing
-E -> [T] [E0]
-E0 -> + [T] [E0] | e
-T -> [F] [T0]
-T0 -> * [F] [T0]
-F -> id | ( [E] )
+# Thoroughly Fixed LL(1) SQL Grammar
+
+# Entry point
+Query -> [Statement]
+
+# Main statement types - each starts with a unique keyword
+Statement -> SELECT [SelectRest] | INSERT [InsertRest] | UPDATE [UpdateRest] | DELETE [DeleteRest] | CREATE [CreateRest] | DROP [DropRest]
+
+# SELECT statements
+SelectRest -> [SelectList] [FromClause] [WhereClause] [GroupByClause] [HavingClause] [OrderByClause] [LimitClause]
+
+SelectList -> [SelectItem] [SelectTail]
+SelectTail -> , [SelectItem] [SelectTail] | e
+
+# SelectItem - * is unique, everything else goes through ArithExpr
+SelectItem -> * | [ArithExpr] [Alias]
+Alias -> AS [Identifier] | e
+
+# FROM clause
+FromClause -> FROM [TableExpr] | e
+TableExpr -> [TablePrimary] [JoinChain]
+TablePrimary -> [Identifier] [TableRefChain] [TableAlias] | ( [SelectRest] ) [TableAlias]
+TableRefChain -> . [Identifier] [TableRefChain] | e
+TableAlias -> [Identifier] | e
+JoinChain -> [JoinClause] [JoinChain] | e
+JoinClause -> [JoinType] JOIN [TablePrimary] ON [BoolExpr]
+JoinType -> INNER | LEFT | RIGHT | FULL [OuterOpt] | e
+OuterOpt -> OUTER | e
+
+# WHERE clause
+WhereClause -> WHERE [BoolExpr] | e
+
+# GROUP BY and HAVING
+GroupByClause -> GROUP BY [ColumnRef] [GroupByTail] | e
+GroupByTail -> , [ColumnRef] [GroupByTail] | e
+HavingClause -> HAVING [BoolExpr] | e
+
+# ORDER BY
+OrderByClause -> ORDER BY [OrderItem] [OrderByTail] | e
+OrderByTail -> , [OrderItem] [OrderByTail] | e
+OrderItem -> [ColumnRef] [SortOrder]
+SortOrder -> ASC | DESC | e
+
+# LIMIT
+LimitClause -> LIMIT [Number] [OffsetClause] | e
+OffsetClause -> OFFSET [Number] | e
+
+# INSERT statements
+InsertRest -> INTO [Identifier] [InsertBody]
+# Fixed: Each alternative has distinct FIRST set
+InsertBody -> ( [ColumnList] ) [InsertValues] | VALUES [ValuesList] | SELECT [SelectRest]
+ColumnList -> [Identifier] [ColumnTail]
+ColumnTail -> , [Identifier] [ColumnTail] | e
+InsertValues -> VALUES [ValuesList] | SELECT [SelectRest]
+ValuesList -> ( [ValueList] ) [ValuesRest]
+ValueList -> [Value] [ValueTail]
+ValueTail -> , [Value] [ValueTail] | e
+ValuesRest -> , ( [ValueList] ) [ValuesRest] | e
+
+# UPDATE statements
+UpdateRest -> [Identifier] SET [AssignmentList] [WhereClause]
+AssignmentList -> [Assignment] [AssignmentTail]
+AssignmentTail -> , [Assignment] [AssignmentTail] | e
+Assignment -> [Identifier] = [ArithExpr]
+
+# DELETE statements
+DeleteRest -> FROM [Identifier] [WhereClause]
+
+# CREATE statements
+CreateRest -> TABLE [Identifier] ( [ColumnDefList] )
+ColumnDefList -> [ColumnDef] [ColumnDefTail]
+ColumnDefTail -> , [ColumnDef] [ColumnDefTail] | e
+ColumnDef -> [Identifier] [DataType] [ConstraintList]
+DataType -> INT | INTEGER | VARCHAR ( [Number] ) | TEXT | BOOLEAN | DATE | TIMESTAMP | DECIMAL ( [Number] , [Number] )
+ConstraintList -> [Constraint] [ConstraintList] | e
+Constraint -> NOT NULL | PRIMARY KEY | UNIQUE | DEFAULT [Value]
+
+# DROP statements
+DropRest -> TABLE [Identifier] | INDEX [Identifier]
+
+# Boolean expressions - FIXED to eliminate ( ambiguity
+BoolExpr -> [BoolTerm] [OrTail]
+OrTail -> OR [BoolTerm] [OrTail] | e
+BoolTerm -> [BoolFactor] [AndTail]
+AndTail -> AND [BoolFactor] [AndTail] | e
+BoolFactor -> NOT [BoolFactor] | [BoolAtom]
+
+# FIXED: Eliminated the ( ambiguity - all parentheses handled through ArithExpr
+BoolAtom -> [ArithExpr] [BoolSuffix]
+BoolSuffix -> [CompOp] [ArithExpr] | IN ( [ValueList] ) | LIKE [String] | IS [NullTest] | e
+
+CompOp -> = | != | <> | < | <= | > | >=
+NullTest -> NULL | NOT NULL
+
+# Arithmetic expressions - FIXED to handle parentheses properly
+ArithExpr -> [Term] [AddTail]
+AddTail -> [AddOp] [Term] [AddTail] | e
+Term -> [Factor] [MulTail]
+MulTail -> [MulOp] [Factor] [MulTail] | e
+
+# FIXED: Separated parenthesized expressions from other factors
+Factor -> [AtomicFactor] | ( [ArithExpr] )
+
+# AtomicFactor contains all non-parenthesized factors
+AtomicFactor -> [Number] | [String] | [Boolean] | NULL | [Identifier] [IdentRest]
+IdentRest -> . [Identifier] | ( [ArgList] ) | e
+ArgList -> [ArithExpr] [ArgTail] | e
+ArgTail -> , [ArithExpr] [ArgTail] | e
+
+AddOp -> + | -
+MulOp -> * | / | %
+
+# Column references
+ColumnRef -> [Identifier] [DotIdent]
+DotIdent -> . [Identifier] | e
+
+# Basic elements
+Value -> [Number] | [String] | [Boolean] | NULL
+Identifier -> symbol
+Number -> number  
+String -> string
+Boolean -> TRUE | FALSE
 `;
 
 const input = `
 select 1 as test
 from stuff.table.table2 a
-where a.id = 0;
-
+where a.id = 0
 -- select 1 as test
 -- from test b, test_test a
 -- where a.id = 0;
@@ -68,6 +183,27 @@ function tokenize(input) {
   return tokens;
 }
 
+function unwrapSet(set) {
+  const result = new Set();
+  const seen = new Set();
+
+  function helper(current) {
+    if (seen.has(current)) return;
+    seen.add(current);
+
+    for (const item of current) {
+      if (typeof item === 'string') {
+        result.add(item);
+      } else if (item instanceof Set) {
+        helper(item);
+      }
+    }
+  }
+
+  helper(set);
+  return result;
+}
+
 /**
  * 
  * @param {Array} grammar An array of productions where each production is an object with a name and a rules array\
@@ -75,71 +211,92 @@ function tokenize(input) {
  * @param {Object} productions A map of production names to indices\
  * e.g. { S: 0, B: 1, C: 2 }
  */
-function ll1toParsingTable(grammar, productions) {
-  print(grammar, productions);
-
+function ll1toStackMachine(grammar, productions) {
   // Caching to prevent infinite recursion and improve performance
   let cacheFirst = Array(grammar.length);
-  let cacheFollow = Array(grammar.length);
+  let cacheNextProd = Array(grammar.length);
   for (let i = 0; i < cacheFirst.length; i++) {
     cacheFirst[i] = Array(grammar[i].rules.length);
-    for (let j = 0; j < cacheFirst[i].length; j++) {
-      cacheFirst[i][j] = new Set();
-    }
   }
 
   function getRuleEnumerater(productionIdx) {
     return Array(grammar[productionIdx].rules.length).fill(0).map((_, i) => [productionIdx, i]);
   }
 
-  function getFirstProduction(productionIdx, callStack = []) {
+  function getFirstProduction(productionIdx) {
     for (let [prodI, ruleI] of getRuleEnumerater(productionIdx)) {
-      getFirst(prodI, ruleI, callStack);
+      getFirst(prodI, ruleI);
     }
   }
 
-  function getFirst(productionIdx, ruleIdx, callStack = []) {
+  function getFirst(productionIdx, ruleIdx) {
+    if (cacheFirst[productionIdx][ruleIdx] === undefined) {
+      cacheFirst[productionIdx][ruleIdx] = new Set();
+    } else return;
+    
     const set = cacheFirst[productionIdx][ruleIdx];
     const production = grammar[productionIdx];
     const rule = production.rules[ruleIdx];
     const first = rule[0];
 
-    // Check call stack for circular dependency, e.g. getFirst(0, 0) -> getFirst(0, 0)
-    for (let i = 0; i < callStack.length; i++) {
-      if (callStack[i][0] === productionIdx && callStack[i][1] === ruleIdx) {
-        return; // Circular dependency so ignore this rule
-      }
-    }
-
     // If the first element is a terminal, add it to the set and return
     if (typeof first === 'string') {
       // Add to this rule
-      set.add(first);
-      
-      // Add this first to every rule in the call stack
-      for (let [prodI, ruleI] of callStack) {
-        cacheFirst[prodI][ruleI].add(first);
-      }
+      if (first === '') {
+        for (let prod of cacheNextProd[productionIdx]) {
+          // Skip recursive productions
+          if (prod === productionIdx) continue;
+          
+          // Terminal
+          if (typeof prod === 'string') {
+            set.add(prod);
+            continue;
+          }
 
+          getFirstProduction(prod);
+
+          // Add to this rule
+          for (let [prodI, ruleI] of getRuleEnumerater(prod)) {
+            set.add(cacheFirst[prodI][ruleI]);
+          }
+        }
+      } else {
+        set.add(first);
+      }
       return;
     }
 
     // If the first element is a non-terminal, find the first of the non-terminal
-    if (typeof first === 'number') getFirstProduction(first, [...callStack, [productionIdx, ruleIdx]]);
+    if (typeof first === 'number') {
+      getFirstProduction(first);
+      
+      // Add to this rule
+      for (let [prodI, ruleI] of getRuleEnumerater(first)) {
+        set.add(cacheFirst[prodI][ruleI]);
+      }
+    }
   }
 
-  function getFollow(productionIdx) {
-    // Caching
-    if (cacheFollow[productionIdx] !== undefined) return;
-    cacheFollow[productionIdx] = new Set();
-
-    // If the production is the start production, add $ to the set
-    if (productionIdx === 0) {
-      cacheFollow[productionIdx].add('$');
-      return;
+  function getFirstProductions() {
+    // Go in reverse order because terminals are likely to be at the end
+    for (let i = grammar.length - 1; i >= 0; i--) {
+      getFirstProduction(i);
     }
 
-    // Find all appearances of the production in the grammar
+    // Unwrap nested sets
+    for (let i = 0; i < cacheFirst.length; i++) {
+      for (let j = 0; j < cacheFirst[i].length; j++) {
+        cacheFirst[i][j] = unwrapSet(cacheFirst[i][j]);
+      }
+    }
+  }
+
+  function getNextProductions(productionIdx) {
+    // Check cache
+    if (cacheNextProd[productionIdx] !== undefined) return;
+    let set = new Set();
+    cacheNextProd[productionIdx] = set;
+    if (productionIdx === 0) set.add('$');
     for (let i = grammar.length - 1; i >= 0; i--) {
       let production = grammar[i];
       let rules = production.rules;
@@ -147,108 +304,16 @@ function ll1toParsingTable(grammar, productions) {
         let rule = rules[j];
         for (let k = 0; k < rule.length; k++) {
           let element = rule[k];
-          if (typeof element === 'number' && element === productionIdx) {
-            // We found an appearance of the production
-            let nextElement = rule[k + 1];
-            
-            // If there is no next element, get the follow of the current production
-            if (nextElement === undefined) {
-              getFollow(i);
-              for (let follow of cacheFollow[i]) {
-                cacheFollow[productionIdx].add(follow);
-              }
-              continue;
-            }
-
-            // If the next element is terminal, add it to the set
-            if (typeof nextElement === 'string') {
-              cacheFollow[productionIdx].add(nextElement);
-              continue;
-            }
-
-            // If the next element is non-terminal add the first of the non-terminal to the set
-            if (typeof nextElement === 'number') {
-              for (let [prodI, ruleI] of getRuleEnumerater(nextElement)) {
-                for (let first of cacheFirst[prodI][ruleI]) {
-                  // Add the first of the non-terminal to the set
-                  if (first !== '') {
-                    cacheFollow[productionIdx].add(first);
-                    continue;
-                  }
-
-                  // Otherwise find the follow of the non-terminal
-                  getFollow(prodI);
-                  for (let follow of cacheFollow[prodI]) {
-                    // But then if this is an epsilon add the follow to the set and so on...
-                    cacheFollow[productionIdx].add(follow);
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Go in reverse order because terminals are likely to be at the end
-  for (let i = grammar.length - 1; i >= 0; i--) {
-    getFirstProduction(i);
-  }
-
-  print(cacheFirst);
-}
-
-function ll1toStackMachine(grammar, productions) {
-  let cacheFirst = new Map();
-  let cacheFollow = new Map();
-
-  function getFirst(production, set, ruleIdx) {
-    let start = ruleIdx ?? 0;
-    let end = ruleIdx ?? production.rules.length - 1;
-    for (let i = start; i <= end; i++) {
-      let rule = production.rules[i];
-      let first = rule[0];
-
-      // Check cache
-      const key = `${production.name}:${i}`;
-      if (cacheFirst.has(key)) {
-        first = cacheFirst.get(key);
-        continue;
-      }
-
-      if (typeof first === 'string') {
-        // Terminal
-        set.add(first);
-      } else if (typeof first === 'number') {
-        // Non-terminal
-        getFirst(grammar[first], set)
-      }
-    }
-  }
-
-  function getFollow(productionIdx, set) {
-    if (cacheFollow.has(productionIdx)) return cacheFollow.get(productionIdx);
-    cacheFollow.set(productionIdx, set);
-
-    // For every appearance of a production in a rule, run getFirst on the next rule element
-    for (let i = 0; i < grammar.length; i++) {
-      let rules = grammar[i].rules;
-      for (let j = 0; j < rules.length; j++) {
-        let rule = rules[j];
-        for (let k = 0; k < rule.length; k++) {
-          let element = rule[k];
           if (element === productionIdx) {
             let nextElement = rule[k + 1];
             if (nextElement === undefined) {
-              // If there is no next element, get the follow of the current production
-              getFollow(i, set);
-            } else if (typeof nextElement === 'string') {
-              // Terminal
+              getNextProductions(i);
+              
+              for (let prod of cacheNextProd[i]) {
+                set.add(prod);
+              }
+            } else {
               set.add(nextElement);
-            } else if (typeof nextElement === 'number') {
-              // Non-terminal
-              getFirst(grammar[nextElement], set);
             }
           }
         }
@@ -256,55 +321,79 @@ function ll1toStackMachine(grammar, productions) {
     }
   }
 
-  let firstAndFollow = [];
-  for (let i = 0; i < grammar.length; i++) {
-    let production = grammar[i];
-    let follow = new Set('$');
-    getFollow(i, follow);
-    for (let j = 0; j < production.rules.length; j++) {
-      let rule = production.rules[j];
-      let first = new Set();
-      getFirst(production, first, j);
-      firstAndFollow.push({ production: i, rule, first, follow });
+  function computeNextProductions() {
+    for (let i = grammar.length - 1; i >= 0; i--) {
+      getNextProductions(i);
     }
   }
 
-  // print(grammar);
-  // print(firstAndFollow);
+  function validateFirst() {
+    // For each production ensure that all rule sets:
+    // 1. Are non-empty
+    // 2. Disjoint
+    // 3. Don't contain epsilon
+    // 4. Don't contain any numbers
+    // 5. Don't contain any strings
 
+    for (let i = 0; i < grammar.length; i++) {
+      let production = cacheFirst[i];
+      if (production === undefined) throw "Error: First set not computed for production " + grammar[i].name;
+      for (let j = 0; j < production.length; j++) {
+        let rule = production[j];
+        if (rule.size === 0) throw "Error: First set for production " + grammar[i].name + " in rule " + (j + 1) + " is empty";
+        for (let element of rule) {
+          if (element === '') throw "Error: First set for production " + grammar[i].name + " contains epsilon";
+          if (typeof element === 'number') throw "Error: First set for production " + grammar[i].name + " contains non-terminal";
+        }
+      }
+
+      // Intersect all rule sets
+      if (production.length === 1) continue; // Only one rule
+      let intersection = new Set(production[0]);
+      for (let j = 1; j < production.length; j++) {
+        intersection = intersection.intersection(production[j]);
+      }
+      if (intersection.size !== 0) throw "Error: Ambiguous starting symbol for production " + grammar[i].name
+        + ": " + Array.from(intersection).join(', ');
+    }
+  }
+
+  computeNextProductions();
+  getFirstProductions();
+  validateFirst();
+
+  // Construct the parsing table
   let parsingTable = Array(Object.keys(productions).length);
   
   for (let i = 0; i < parsingTable.length; i++) {
     parsingTable[i] = {};
   }
-  // print(productions);
 
-  for (let i = 0; i < firstAndFollow.length; i++) {
-    let productionIdx = firstAndFollow[i].production;
-    let rule = firstAndFollow[i].rule;
-    let first = firstAndFollow[i].first;
-    let follow = firstAndFollow[i].follow;
-
-    for (let terminal of first) {
-      // print(productionIdx, terminal, rule);
-      parsingTable[productionIdx][terminal] = rule;
+  for (let i = 0; i < cacheFirst.length; i++) {
+    for (let j = 0; j < cacheFirst[i].length; j++) {
+      let startingSymbols = cacheFirst[i][j];
+      for (let element of startingSymbols) {
+        parsingTable[i][element] = grammar[i].rules[j];
+      }
     }
   }
 
   let stackMachine = new StackMachine();
   for (let i = 0; i < parsingTable.length; i++) {
     let production = grammar[i];
-    for (let terminal of Object.keys(parsingTable[i])) {
+    for (let terminal in parsingTable[i]) {
       let rule = parsingTable[i][terminal];
-      stackMachine.addTransition(terminal, `[${production.name}]`, rule.map(s => {
-        if (typeof s === 'number') {
-          return `[${grammar[s].name}]`;
+      stackMachine.addTransition(terminal, `[${production.name}]`, rule.map(element => {
+        if (typeof element === 'number') {
+          return `[${grammar[element].name}]`;
         } else {
-          return s;
+          return element;
         }
       }));
     }
   }
+
+  // print(stackMachine.transitions)
 
   return stackMachine;
 }
@@ -362,6 +451,8 @@ class StackMachine {
       }
     }
 
+    newTokens.push({ token: '$', value: '$' });
+
     return newTokens;
   }
   
@@ -396,6 +487,7 @@ class StackMachine {
       children: [],
       nchildren: 1
     };
+    let root = currentNode;
 
     while (stack.length > 0 && inputIdx < input.length) {
       let read = input[inputIdx];
@@ -425,6 +517,7 @@ class StackMachine {
         // Non-Terminal
         let push = this.transitions[pop][value];
         for (let i = push.length - 1; i >= 0; i--) {
+          if (push[i] === '') continue;
           stack.push(push[i]);
         }
 
@@ -461,18 +554,25 @@ class StackMachine {
       } else {
         // Terminal
         if (pop !== value && pop !== read.token) {
-          throw new Error(`Expected ${pop} but got ${read.token}, ${read.value}`);
+          print(root);
+          throw new Error(`${pop} expected ${Object.keys(this.transitions[pop]).join(' ')} but got ${read.token}, ${read.value}`);
         }
         inputIdx++;
         currentNode.children.push(read.value);
       }
     }
 
-    // Remove unnecessary fields
-    delete currentNode.parent;
-    delete currentNode.nchildren;
+    // Final backtrack
+    while (currentNode.children.length === currentNode.nchildren && currentNode.parent) {
+      let oldNode = currentNode;
+      currentNode = currentNode.parent;
+      
+      // Remove unnecessary fields
+      delete oldNode.parent;
+      delete oldNode.nchildren;
+    }
 
-    let good = stack.length === 0 && inputIdx === input.length;
+    let good = stack.length === 0 && input[inputIdx].value === '$';
 
     if (!good) return false;
 

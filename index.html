@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.1.9/p5.min.js"></script>
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/notif.css">
   <title>SQL Formatter</title>
 </head>
 <body>
@@ -12,16 +13,16 @@
   <sub>By Emmett Jaakkola</sub>
   <div class="container">
     <div class="section">
-      <textarea id="input" placeholder="Enter your SQL code here"></textarea>
+      <textarea id="input" placeholder="Enter your SQL code here" spellcheck="false"></textarea>
       <button onclick="formatCode()">Format</button>
     </div>
     <div class="section">
-      <textarea id="output" placeholder="Formatted Output" readonly></textarea>
+      <textarea id="output" placeholder="Formatted Output" spellcheck="false" readonly></textarea>
       <button onclick="copyCode()">Copy</button>
     </div>
   </div>
+  <script src="js/notif.js"></script>
   <script src="js/grammar.js"></script>
-  <script src="js/parse.js"></script>
   <script src="js/format.js"></script>
   <script src="js/main.js"></script>
 </body>

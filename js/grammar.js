@@ -5,16 +5,16 @@ const syntax = `
 Query -> [Statement]
 
 # Main statement types - each starts with a unique keyword
-Statement -> SELECT [SelectRest] | INSERT [InsertRest] | UPDATE [UpdateRest] | DELETE [DeleteRest] | CREATE [CreateRest] | DROP [DropRest]
+Statement -> SELECT [SelectRest] | INSERT [InsertRest] | UPDATE [UpdateRest] | DELETE [DeleteRest] | CREATE [CreateRest] | DROP [DropRest] | WITH [CTERest] SELECT [SelectRest]
 
 # SELECT statements
-SelectRest -> [SelectList] [FromClause] [WhereClause] [GroupByClause] [HavingClause] [OrderByClause] [LimitClause]
+SelectRest -> [SelectList] [FromClause] [WhereClause] [GroupByClause] [HavingClause] [OrderByClause] [LimitClause] [UnionClause]
 
 SelectList -> [SelectItem] [SelectTail]
 SelectTail -> , [SelectItem] [SelectTail] | e
 
 # SelectItem - * is unique, everything else goes through ArithExpr
-SelectItem -> * | [ArithExpr] [Alias]
+SelectItem -> [ArithExpr] [Alias]
 Alias -> AS [Identifier] | e
 
 # FROM clause
@@ -24,7 +24,7 @@ TablePrimary -> [Identifier] [TableRefChain] [TableAlias] | ( [SelectRest] ) [Ta
 TableRefChain -> . [Identifier] [TableRefChain] | e
 TableAlias -> [Identifier] | e
 JoinChain -> [JoinClause] [JoinChain] | e
-JoinClause -> [JoinType] JOIN [TablePrimary] ON [BoolExpr]
+JoinClause -> [JoinType] JOIN [TablePrimary] ON [BoolExpr] | CROSS JOIN [TablePrimary]
 JoinType -> INNER | LEFT | RIGHT | FULL [OuterOpt] | e
 OuterOpt -> OUTER | e
 
@@ -45,6 +45,14 @@ SortOrder -> ASC | DESC | e
 # LIMIT
 LimitClause -> LIMIT [Number] [OffsetClause] | e
 OffsetClause -> OFFSET [Number] | e
+
+# UNION
+UnionClause -> UNION SELECT [SelectRest] | e
+
+# CTE
+CTERest -> [CTE] [CTETail]
+CTETail -> , [CTE] [CTETail] | e
+CTE -> [Identifier] AS ( SELECT [SelectRest] )
 
 # INSERT statements
 InsertRest -> INTO [Identifier] [InsertBody]
@@ -100,13 +108,13 @@ Term -> [Factor] [MulTail]
 MulTail -> [MulOp] [Factor] [MulTail] | e
 
 # FIXED: Separated parenthesized expressions from other factors
-Factor -> [AtomicFactor] | ( [ArithExpr] )
+Factor -> [AtomicFactor] | ( [BoolExpr] )
 
 # AtomicFactor contains all non-parenthesized factors
 AtomicFactor -> [Number] | [String] | [Boolean] | NULL | [Identifier] [IdentRest]
 IdentRest -> . [Identifier] | ( [ArgList] ) | e
-ArgList -> [ArithExpr] [ArgTail] | e
-ArgTail -> , [ArithExpr] [ArgTail] | e
+ArgList -> [BoolExpr] [ArgTail] | e
+ArgTail -> , [BoolExpr] [ArgTail] | e
 
 AddOp -> + | -
 MulOp -> * | / | %
@@ -117,7 +125,7 @@ DotIdent -> . [Identifier] | e
 
 # Basic elements
 Value -> [Number] | [String] | [Boolean] | NULL
-Identifier -> symbol
+Identifier -> symbol | *
 Number -> number  
 String -> string
 Boolean -> TRUE | FALSE
@@ -509,7 +517,7 @@ class StackMachine {
         currentNode = currentNode.parent;
         
         // Remove unnecessary fields
-        delete oldNode.parent;
+        // delete oldNode.parent;
         delete oldNode.nchildren;
       }
 
@@ -554,11 +562,27 @@ class StackMachine {
       } else {
         // Terminal
         if (pop !== value && pop !== read.token) {
-          print(root);
-          throw new Error(`${pop} expected ${Object.keys(this.transitions[pop]).join(' ')} but got ${read.token}, ${read.value}`);
+          if (this.transitions[pop] === undefined) {
+            let errmsg = `Expected ${pop} but got ${
+              read.token === '$' ? 'end of input' : (
+                read.token === read.value ? `'${read.value}'` : `${read.token} ${read.value}`
+              )
+            }`;
+            print(currentNode);
+            throw new Error(errmsg);
+          }
+          let errmsg = `${pop} expected ${Object.keys(this.transitions[pop]).join(' ')} but got ${
+            read.token === '$' ? 'end of input' : (
+              read.token === read.value ? `'${read.value}'` : `${read.token} ${read.value}`
+            )
+          }`;
+          throw new Error(errmsg);
         }
         inputIdx++;
-        currentNode.children.push(read.value);
+
+        // Retain uppercase values
+        let readValue = value === pop ? value : read.value;
+        currentNode.children.push(readValue);
       }
     }
 
@@ -568,7 +592,7 @@ class StackMachine {
       currentNode = currentNode.parent;
       
       // Remove unnecessary fields
-      delete oldNode.parent;
+      // delete oldNode.parent;
       delete oldNode.nchildren;
     }
 
